@@ -76,19 +76,25 @@ int main()
 	// Initialise general variables
 	HRESULT hr = S_OK;
 	int frame_index = 0;
+	bool snatchIr = false;
 
 	// Initialise Kinect variables
 	IKinectSensor* a_sensor = nullptr;
 	IDepthFrameSource* depthFrameSource = nullptr;
 	IDepthFrameReader* depthFrameReader = nullptr;
 	IDepthFrame* depthFrame = nullptr;
+	IInfraredFrameSource* irFrameSource = nullptr;
+	IInfraredFrameReader* irFrameReader = nullptr;
+	IInfraredFrame* irFrame = nullptr;
 	uint16* depthBuffer = nullptr;
+	uint16* irBuffer = nullptr;
 	uint16* warpBuffer = nullptr;
 
 	// Raw frame dimensions
 	int rawWidth = 512;
 	int rawHeight = 424;
 	depthBuffer = new uint16[rawWidth * rawHeight];
+	irBuffer = new uint16[rawWidth * rawHeight];
 
 	// Initialise OpenCV variables
 	Mat cvFrame = Mat(424, 512, CV_16U);
@@ -104,6 +110,9 @@ int main()
 	Mat normFrame_first, normFrame_diff, colNormFrame_diff;
 	Mat warpFrame_first, warpFrame_diff;
 	Mat handFrame, handFrame_blur;
+
+	Mat rawIrFrame;
+	Mat warpIrFrame;
 
 	// Correlation kernel applied to warped iamge
 	Mat vertKernel = (Mat_<double>(20, 1) << 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 );
@@ -190,14 +199,30 @@ int main()
 	HRCHECK(GetDefaultKinectSensor(&a_sensor));
 	a_sensor->Open();
 
-	// Get depth source
-	HRCHECK(a_sensor->get_DepthFrameSource(&depthFrameSource));
-
 	// Get depth reader
+	HRCHECK(a_sensor->get_DepthFrameSource(&depthFrameSource));
 	HRCHECK(depthFrameSource->OpenReader(&depthFrameReader));
 	RELEASE(depthFrameSource); // Source no longer needed
+
+	// Get IR reader
+	HRCHECK(a_sensor->get_InfraredFrameSource(&irFrameSource));
+	HRCHECK(irFrameSource->OpenReader(&irFrameReader));
+	RELEASE(irFrameSource); // Source no longer needed
 	
 	do {
+		if (snatchIr) {
+			HRCONTINUE(irFrameReader->AcquireLatestFrame(&irFrame));
+			irFrame->CopyFrameDataToArray(rawWidth * rawHeight, irBuffer);
+			RELEASE(irFrame);
+			rawIrFrame = Mat(rawHeight, rawWidth, CV_16UC1, irBuffer);
+			rawIrFrame.convertTo(rawIrFrame, CV_8UC1, 0.02);
+			warpIrFrame = rawIrFrame.clone();
+			warpPerspective(warpIrFrame, warpIrFrame, lambda, Size(warpWidth, warpHeight));
+			imshow("irFrame", warpIrFrame);
+			imwrite(format("Capture/warpIrFrame/warpIrFrame%04d.jpg", frame_index), warpIrFrame);
+			frame_index++;
+			continue;
+		}
 
 		// Fetch latest Kinect Frame
 		HRCONTINUE(depthFrameReader->AcquireLatestFrame(&depthFrame));
@@ -312,6 +337,8 @@ int main()
 					keys[key].prevDepth[3] +
 					keys[key].prevDepth[4]) / 5.0f;
 				
+				if (key == 11) { printf("%i,%.2f", frame_index, keys[key].avgDepth); }
+
 				// Highlight test key
 				Scalar color = key == 11 ? Scalar(0,0,1) : Scalar(0.7, 0.4, 0.4);
 				rectangle(colNormFrame_diff, pt1, pt2, color);
@@ -324,15 +351,20 @@ int main()
 				// Calculate a volume iff newly pressed beyond point of sound
 				if (keys[key].avgDepth > soundDist && keys[key].soundVol == 0) {
 					keys[key].soundVol = (keys[key].avgDepth - keys[key].avgDepth_prev) * 30;
-					printf("%s%i,%.2f\n", keyNames[keys[key].note], keys[key].octave, keys[key].soundVol);
+					printf(",%s%i,%.2f", keyNames[keys[key].note], keys[key].octave, keys[key].soundVol);
+				}
+
+				if (keys[key].soundVol > 0) {
+					String formatted = format("%s%i,%.2f", keyNames[keys[key].note], keys[key].octave, keys[key].soundVol);
+					putText(colNormFrame_diff, formatted, Point(160, 100), FONT_HERSHEY_PLAIN, 1, Scalar(0.2, 1, 0.3));
 				}
 			}
 		}
 
 		/*______VISUAL OUTPUT______*/
 
-		putText(colNormFrame_diff, to_string(keys[11].depth), Point(120, 100), FONT_HERSHEY_PLAIN, 1, Scalar(0, 0, 1));
-		putText(colNormFrame_diff, to_string(keys[11].avgDepth), Point(120, 115), FONT_HERSHEY_PLAIN, 1, Scalar(1, 0.5, 0.2));
+		putText(colNormFrame_diff, to_string(keys[11].depth), Point(40, 100), FONT_HERSHEY_PLAIN, 1, Scalar(0, 0, 1));
+		putText(colNormFrame_diff, to_string(keys[11].avgDepth), Point(40, 115), FONT_HERSHEY_PLAIN, 1, Scalar(1, 0.5, 0.2));
 
 		imshow("rawFrame", rawFrame);
 
@@ -363,8 +395,15 @@ int main()
 			imshow("handFrame_blur", handFrame_blur);
 		}
 
+		if (frame_index >= 1) {
+			Mat saveFrame;
+			normFrame.convertTo(saveFrame, CV_8UC1, 255.0);
+			imwrite(format("Capture/normFrameReg/normFrameReg%04d.png", frame_index), saveFrame);
+		}
+
 		// Iterate
 		frame_index++;
+		printf("\n");
 
 	} while (waitKey(10) > 0);
 	
@@ -372,10 +411,13 @@ int main()
 cleanup:
 
 	// Release Kinect stuff safely
+	RELEASE(a_sensor);
 	RELEASE(depthFrameReader);
 	RELEASE(depthFrameSource);
-	RELEASE(a_sensor);
 	RELEASE(depthFrame);
+	RELEASE(irFrameReader);
+	RELEASE(irFrameSource);
+	RELEASE(irFrame);
 
 	return 0;
 

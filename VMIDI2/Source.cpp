@@ -293,15 +293,15 @@ int main()
 					imshow("intersect", intersectMask);
 					imshow("masked", combiMask); 
 				}
+
+				// Extract the key's average depth
+				Scalar average = mean(warpFrame_diff, combiMask);
+				keys[key].depth = average.val[0];
 				
 				// Mask cleanup
 				mask.release();
 				combiMask.release();
 				intersectMask.release();
-
-				// Extract the key's average depth
-				Scalar average = mean(warpFrame_diff, combiMask);
-				keys[key].depth = average.val[0];
 
 				// Store rolling average
 				keys[key].prevDepth[frame_index % 5] = keys[key].depth;
